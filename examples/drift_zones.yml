@@ -1,0 +1,309 @@
+# drift_zones.yml - Seacrest AI drift zones (2026-10-25, all chevron corners: 131 zones on 24 roads, from ai_splines\drift\scan_chevron_corners.py)
+# Read by the custom AssettoServer build (driftzones.cs). Delete/rename this file = drift off.
+# Center = middle of the chevron faces, game coords [x, y(height), z].
+# At startup the server log shows per zone which lanes were found and which ones drift (outside lane only).
+
+AngleDeg: 25            # extra body yaw at full drift (nose into the corner)
+CounterSteerRatio: 0.3  # front wheels counter-steer = drift angle x this (limited by WheelAngleScale / full lock)
+OutwardMeters: 0.5      # slide to the outside of the corner at full drift
+SpeedFactor: 1.0        # corner speed x this for drifting cars (1.1 = 10 % faster)
+RearWheelSpin: 2.0      # rear tyres spin this much faster at full drift (smoke test, 1 = off)
+BlendMeters: 50         # ramp in before / out after the corner part
+BlendRate: 5            # smoothing per second (2026-10-27: was 2.5, BlendMeters was 15 - drift started too late)
+Chance: 0.25            # share of cars that drift (2026-10-25: 1 in 4; was 1.0 in the prototype)
+SearchRadius: 120       # lanes within this distance of the centre are checked
+HeightTolerance: 20
+MaxCornerRadius: 200    # spline radius <= this counts as the corner
+MaxLaneGapMeters: 12    # another lane closer than this on the outside of the corner = not the outside lane
+MinCornerMeters: 10     # ignore corner parts shorter than this (junction stubs)
+MinCornerRadius: 25    # lane parts with a point tighter than this never drift (junction turns)
+MinSpeedKmh: 60        # no drift below this speed
+Debug: true             # log every car that starts drifting
+
+Zones:
+  # bear_hollow
+  - Name: bh_01
+    Center: [573, 129, -1189]
+  - Name: bh_04
+    Center: [1546, 163, -2346]
+  - Name: bh_04a
+    Center: [1608, 170, -2464]
+  - Name: bh_07
+    Center: [2100, 204, -3208]
+  - Name: bh_07a
+    Center: [2204, 211, -3239]
+  # big_timber_pass
+  - Name: btp_07
+    Center: [1109, 20, -7501]
+  # boulder_road
+  - Name: br_03
+    Center: [7103, 83, -1193]
+  - Name: br_04
+    Center: [7399, 58, -382]
+  - Name: br_04a
+    Center: [7548, 57, -388]
+  - Name: br_08
+    Center: [8477, 59, -965]
+  - Name: br_08a
+    Center: [8603, 59, -928]
+  - Name: br_09
+    Center: [9614, 59, -1184]
+  # cascade_terrace
+  - Name: ct_05
+    Center: [2384, 152, -1284]
+  - Name: ct_06
+    Center: [2624, 122, -821]
+  - Name: ct_08
+    Center: [1409, 149, -1331]
+  # coral_bay_drive
+  - Name: cbd_01
+    Center: [-1294, 80, -4294]
+  - Name: cbd_01a
+    Center: [-1284, 80, -4352]
+  - Name: cbd_01b
+    Center: [-1221, 80, -4352]
+  - Name: cbd_01c
+    Center: [-1824, 79, -4319]
+  - Name: cbd_02
+    Center: [-2329, 63, -4318]
+  - Name: cbd_03
+    Center: [-2007, 20, -3350]
+  - Name: cbd_04
+    Center: [-2090, 19, -3221]
+  - Name: cbd_06
+    Center: [-3124, 27, -2369]
+  - Name: cbd_06a
+    Center: [-3044, 23, -2485]
+  - Name: cbd_07
+    Center: [-3719, 61, -2424]
+  - Name: cbd_08
+    Center: [-4223, 91, -1502]
+  # eagle_crest_road
+  - Name: ecr_02
+    Center: [7314, 298, -8082]
+  - Name: ecr_02a
+    Center: [7417, 306, -8153]
+  - Name: ecr_04
+    Center: [8336, 400, -7620]
+  - Name: ecr_05
+    Center: [7925, 418, -8232]
+  - Name: ecr_06
+    Center: [8453, 465, -8105]
+  - Name: ecr_08
+    Center: [7669, 557, -9526]
+  - Name: ecr_13
+    Center: [5397, 460, -10330]
+  - Name: ecr_14
+    Center: [5473, 426, -9781]
+  - Name: ecr_15
+    Center: [5005, 410, -10263]
+  # east_gorge_freeway
+  - Name: egf_01
+    Center: [7032, 257, -6781]
+  - Name: egf_04
+    Center: [8176, 115, -4311]
+  - Name: egf_05
+    Center: [8556, 87, -3705]
+  - Name: egf_09
+    Center: [9670, 59, -1404]
+  # fairview_road
+  - Name: fr_02
+    Center: [6441, 260, -7948]
+  - Name: fr_02a
+    Center: [6157, 258, -7892]
+  - Name: fr_03
+    Center: [5422, 254, -8352]
+  - Name: fr_03a
+    Center: [5503, 255, -8287]
+  - Name: fr_05
+    Center: [4467, 251, -9129]
+  - Name: fr_06
+    Center: [3784, 264, -8515]
+  # fox_lair_pass
+  - Name: flp_02
+    Center: [1668, 38, -8585]
+  - Name: flp_02a
+    Center: [1368, 37, -8463]
+  - Name: flp_05
+    Center: [3054, 169, -8365]
+  - Name: flp_06
+    Center: [2374, 179, -8880]
+  - Name: flp_07
+    Center: [1801, 227, -9502]
+  - Name: flp_09
+    Center: [3086, 250, -9756]
+  # grand_ocean_road
+  - Name: gor_02
+    Center: [-5365, 72, -1816]
+  - Name: gor_03
+    Center: [-5805, 63, -1377]
+  - Name: gor_03b
+    Center: [-5777, 63, -1485]
+  - Name: gor_04
+    Center: [-5058, 115, -895]
+  - Name: gor_06
+    Center: [-4722, 200, 458]
+  # hope_canyon_freeway
+  - Name: hcf_01
+    Center: [1925, 55, 3603]
+  - Name: hcf_04
+    Center: [4593, 24, 3283]
+  - Name: hcf_05
+    Center: [4938, 24, 3212]
+  - Name: hcf_07
+    Center: [6231, 52, 2376]
+  - Name: hcf_11
+    Center: [3899, 18, 3215]
+  - Name: hcf_12
+    Center: [5375, 20, 3271]
+  - Name: hcf_14
+    Center: [6108, 33, 2643]
+  # lakeside_ave
+  - Name: la_01
+    Center: [-3098, 35, -6817]
+  - Name: la_02
+    Center: [-3109, 35, -6692]
+  - Name: la_04
+    Center: [-1638, 34, -7004]
+  - Name: la_05
+    Center: [-1089, 41, -7387]
+  - Name: la_06
+    Center: [-469, 35, -7346]
+  - Name: la_07
+    Center: [-78, 21, -8211]
+  # lost_horse_road
+  - Name: lhr_04
+    Center: [-2426, 132, 1902]
+  - Name: lhr_04a
+    Center: [-2316, 135, 1841]
+  - Name: lhr_06
+    Center: [-2223, 135, 3073]
+  - Name: lhr_08
+    Center: [-2841, 109, 1897]
+  - Name: lhr_08a
+    Center: [-2704, 112, 1932]
+  # memorial_highway
+  - Name: mh_02
+    Center: [3545, 223, -3090]
+  - Name: mh_03
+    Center: [4768, 205, -3330]
+  - Name: mh_03a
+    Center: [4801, 204, -3193]
+  - Name: mh_05
+    Center: [3729, 161, -2659]
+  - Name: mh_05a
+    Center: [3761, 161, -2534]
+  - Name: mh_07
+    Center: [5089, 107, -2619]
+  - Name: mh_08
+    Center: [5598, 106, -1221]
+  - Name: mh_08a
+    Center: [5533, 106, -1211]
+  - Name: mh_08b
+    Center: [5588, 106, -1286]
+  - Name: mh_08c
+    Center: [5608, 106, -1156]
+  - Name: mh_08d
+    Center: [5663, 106, -1231]
+  # mission_beach
+  - Name: mb_03
+    Center: [-287, 63, 4305]
+  - Name: mb_04
+    Center: [-367, 61, 4429]
+  - Name: mb_04a
+    Center: [-92, 37, 4822]
+  - Name: mb_05
+    Center: [-815, 26, 5021]
+  - Name: mb_05a
+    Center: [-719, 28, 5108]
+  - Name: mb_06
+    Center: [-892, 63, 4606]
+  - Name: mb_06a
+    Center: [-773, 65, 4694]
+  # mystic_lake_road
+  - Name: mlr_01
+    Center: [-731, 62, -4617]
+  - Name: mlr_01a
+    Center: [-812, 62, -4549]
+  - Name: mlr_05
+    Center: [601, 68, -5999]
+  - Name: mlr_06
+    Center: [31, 27, -6646]
+  # oakmont_valley
+  - Name: ov_02
+    Center: [-614, 91, -1603]
+  - Name: ov_02a
+    Center: [-453, 94, -1656]
+  - Name: ov_05
+    Center: [252, 136, -2687]
+  - Name: ov_07
+    Center: [-588, 83, -2609]
+  - Name: ov_07a
+    Center: [-597, 101, -3359]
+  # rockingham_road
+  - Name: rr_03
+    Center: [-1749, 61, -8570]
+  - Name: rr_03a
+    Center: [-1503, 102, -8134]
+  - Name: rr_07
+    Center: [-129, 83, -9860]
+  - Name: rr_07a
+    Center: [-29, 87, -9958]
+  # silver_creek_road
+  - Name: scr_02
+    Center: [6246, 99, -491]
+  - Name: scr_05
+    Center: [6200, 72, 199]
+  - Name: scr_07
+    Center: [6330, 60, 1880]
+  - Name: scr_08
+    Center: [6482, 54, 2289]
+  # south_bay_turnpike
+  - Name: sbt_01
+    Center: [10, 122, 1576]
+  - Name: sbt_02
+    Center: [274, 122, 1576]
+  - Name: sbt_04
+    Center: [606, 92, 2929]
+  - Name: sbt_05
+    Center: [32, 101, 2945]
+  - Name: sbt_08
+    Center: [1347, 54, 3312]
+  # south_face_drive
+  - Name: sfd_01
+    Center: [6928, 257, -6999]
+  - Name: sfd_03
+    Center: [6734, 232, -6087]
+  - Name: sfd_04
+    Center: [6442, 235, -5592]
+  - Name: sfd_04a
+    Center: [6568, 235, -5630]
+  - Name: sfd_07
+    Center: [4206, 238, -4699]
+  - Name: sfd_07a
+    Center: [4283, 243, -4793]
+  - Name: sfd_07b
+    Center: [4659, 229, -4711]
+  - Name: sfd_09
+    Center: [3496, 220, -4024]
+  # sunset_drive
+  - Name: sd_04
+    Center: [-3986, 69, 4342]
+  - Name: sd_06
+    Center: [-4876, 159, 3168]
+  - Name: sd_06a
+    Center: [-4817, 159, 3178]
+  - Name: sd_06b
+    Center: [-4876, 159, 3105]
+  # three_points_road
+  - Name: tpr_11
+    Center: [9740, 17, 1276]
+  # west_beach_freeway
+  - Name: wbf_01
+    Center: [-637, 121, 1576]
+  - Name: wbf_05
+    Center: [-4065, 87, 297]
+  - Name: wbf_07
+    Center: [-4422, 91, -975]
+  - Name: wbf_07a
+    Center: [-4353, 91, -1251]

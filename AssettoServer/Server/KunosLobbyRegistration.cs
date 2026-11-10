@@ -19,23 +19,68 @@ public class KunosLobbyRegistration : CriticalBackgroundService
     private readonly EntryCarManager _entryCarManager;
     private readonly HttpClient _httpClient;
 
+    // Re-register on session change/restart (Seacrest patch)
+    private const int MinReRegisterSeconds = 60;
+    private readonly SemaphoreSlim _registerLock = new(1, 1);
+    private volatile bool _initialRegistrationDone;
+    private DateTime _lastRegistration = DateTime.MinValue;
+    private CancellationToken _stoppingToken;
+
     public KunosLobbyRegistration(ACServerConfiguration configuration, SessionManager sessionManager, EntryCarManager entryCarManager, HttpClient httpClient, IHostApplicationLifetime applicationLifetime) : base(applicationLifetime)
     {
         _configuration = configuration;
         _sessionManager = sessionManager;
         _entryCarManager = entryCarManager;
         _httpClient = httpClient;
+        _sessionManager.SessionChanged += OnSessionChanged;
+    }
+
+    private void OnSessionChanged(SessionManager sender, SessionChangedEventArgs args)
+    {
+        if (!_configuration.Server.RegisterToLobby || !_initialRegistrationDone)
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            if (!await _registerLock.WaitAsync(0))
+                return; // a registration is already running
+
+            try
+            {
+                if ((DateTime.UtcNow - _lastRegistration).TotalSeconds < MinReRegisterSeconds)
+                {
+                    Log.Information("Session changed, lobby re-registration skipped (last one was less than {Seconds} s ago)", MinReRegisterSeconds);
+                    return;
+                }
+
+                Log.Information("Session changed, re-registering to lobby...");
+                await RegisterToLobbyAsync(_stoppingToken);
+                Log.Information("Lobby re-registration successful");
+            }
+            catch (TaskCanceledException) { }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error during Kunos lobby re-registration");
+            }
+            finally
+            {
+                _registerLock.Release();
+            }
+        });
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!_configuration.Server.RegisterToLobby)
             return;
+
+        _stoppingToken = stoppingToken;
         
         try
         {
             await RegisterToLobbyAsync(stoppingToken);
             Log.Information("Lobby registration successful");
+            _initialRegistrationDone = true;
         }
         catch (TaskCanceledException) { }
         catch (Exception ex)
@@ -112,6 +157,8 @@ public class KunosLobbyRegistration : CriticalBackgroundService
         {
             throw new KunosLobbyException(body);
         }
+
+        _lastRegistration = DateTime.UtcNow;
     }
 
     private async Task PingLobbyAsync(CancellationToken token)

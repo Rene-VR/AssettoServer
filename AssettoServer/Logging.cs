@@ -45,7 +45,7 @@ internal static class Logging
                 }
                 else
                 {
-                    a.Console();
+                    a.Console(restrictedToMinimumLevel: LogEventLevel.Information); // DBG lines only go to the log file
                 }
             })
             .WriteTo.File($"logs/{logPrefix}-.txt", rollingInterval: RollingInterval.Day);

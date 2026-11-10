@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Numerics;
@@ -63,12 +63,53 @@ public class AiState
     private float _endIndicatorDistance;
     private float _minObstacleDistance;
 
+    // front wheel steering for AI traffic
+    private float _lastYaw;
+    private bool _hasLastYaw;
+    private float _smoothedWheelAngleDeg;
+    private const float WheelbaseMeters = 2.6f;
+    private const float MaxWheelAngleDeg = 35f;
+    // WheelAngleScale, RollDegPerG, PitchDegPerG: now read from extra_cfg.yml (AiParams), 2026-10-10
+    private float WheelAngleScale => _configuration.Extra.AiParams.WheelAngleScale;
+    private float RollDegPerG => _configuration.Extra.AiParams.RollDegPerG;
+    private float PitchDegPerG => _configuration.Extra.AiParams.PitchDegPerG;
+    private const float WheelAngleSign = 1.0f;  // set to -1 if wheels turn the wrong way
+
+    // body roll for AI traffic
+    private float _smoothedRollRad;
+    private const float RollSign = 1.0f;       // set to -1 if cars lean into the corner
+    private const float MaxRollDeg = 6.0f;
+
+    // body pitch for AI traffic (nose dives under braking, squats under acceleration)
+    private float _lastSpeed;
+    private float _smoothedLongAccel;
+    private float _smoothedPitchRad;
+    private const float PitchSign = 1.0f;      // set to -1 if the nose goes UP under braking
+    private const float MaxPitchDeg = 3.0f;
+
     private readonly ACServerConfiguration _configuration;
     private readonly SessionManager _sessionManager;
     private readonly EntryCarManager _entryCarManager;
     private readonly WeatherManager _weatherManager;
     private readonly AiSpline _spline;
     private readonly JunctionEvaluator _junctionEvaluator;
+
+    // Seacrest 2026-10-09: traffic rules (stop signs + give way), see trafficrules.cs
+    private readonly TrafficRules _rules;
+    private TrafficJunction? _stopJunction;
+    private int _stopPointId = -1;
+    private float _stopDistance = float.MaxValue;
+    private int _clearedStopId = -1;
+    private bool _waitingAtStop;
+    private long _waitingSince;
+    public bool InStopQueue { get; private set; }
+
+    // Seacrest 2026-10-25: drift zones (visual drift in chevron corners), see driftzones.cs
+    private readonly DriftZones _drift;
+    private bool _driftCar;          // this spawn may drift (Chance)
+    private float _driftFactor;      // 0..1, smoothed
+    private int _driftSide;          // +1 / -1, last zone side
+    private bool _driftLogged;
 
     private static readonly List<Color> CarColors =
     [
@@ -92,8 +133,9 @@ public class AiState
         Color.FromArgb(18, 46, 43)
     ];
 
-    public AiState(EntryCar entryCar, SessionManager sessionManager, WeatherManager weatherManager, ACServerConfiguration configuration, EntryCarManager entryCarManager, AiSpline spline)
+    public AiState(EntryCar entryCar, SessionManager sessionManager, WeatherManager weatherManager, ACServerConfiguration configuration, EntryCarManager entryCarManager, AiSpline spline, TrafficRules rules, DriftZones drift)
     {
+        _drift = drift;
         EntryCar = entryCar;
         _sessionManager = sessionManager;
         _weatherManager = weatherManager;
@@ -101,6 +143,8 @@ public class AiState
         _entryCarManager = entryCarManager;
         _spline = spline;
         _junctionEvaluator = new JunctionEvaluator(spline);
+        _rules = rules;
+        _rules.Register(this);
 
         _lastTick = _sessionManager.ServerTimeMilliseconds;
     }
@@ -109,6 +153,7 @@ public class AiState
     {
         Initialized = false;
         _spline.SlowestAiStates.Leave(CurrentSplinePointId, this);
+        ResetStopState();
     }
 
     private void SetRandomSpeed()
@@ -171,9 +216,79 @@ public class AiState
         _endIndicatorDistance = 0;
         _lastTick = _sessionManager.ServerTimeMilliseconds;
         _minObstacleDistance = Random.Shared.Next(8, 13);
+        _hasLastYaw = false;
+        _smoothedWheelAngleDeg = 0;
+        _smoothedRollRad = 0;
+        _smoothedLongAccel = 0;
+        _smoothedPitchRad = 0;
+        _lastSpeed = CurrentSpeed;
+        _driftCar = _drift.Enabled && Random.Shared.NextDouble() < _drift.Settings.Chance;
+        _driftFactor = 0;
+        _driftSide = 0;
+        _driftLogged = false;
+        ResetStopState();
+        if (_rules.Enabled)
+        {
+            // spawned just past a stop line: do not stop for it
+            int backId = CurrentSplinePointId;
+            for (int b = 0; b < 6 && backId >= 0; b++)
+            {
+                if (_rules.GetStop(backId) != null) { _clearedStopId = backId; break; }
+                if (!_junctionEvaluator.TryPrevious(backId, out var prevId)) break;
+                backId = prevId;
+            }
+        }
         SpawnCounter++;
         Initialized = true;
         Update();
+    }
+
+    private void ResetStopState()
+    {
+        if (_waitingAtStop || InStopQueue) _rules.LeaveAll(this);
+        _stopJunction = null;
+        _stopPointId = -1;
+        _stopDistance = float.MaxValue;
+        _clearedStopId = -1;
+        _waitingAtStop = false;
+        InStopQueue = false;
+    }
+
+    // Seacrest 2026-10-26: front wheel angle from the spline geometry
+    private const float WheelSmoothMeters = 3.0f; // wheel follows the target over about this distance driven
+
+    private static float VertexCurvature(Vector3 a, Vector3 b, Vector3 c)
+    {
+        float h1 = MathF.Atan2(b.Z - a.Z, b.X - a.X);
+        float h2 = MathF.Atan2(c.Z - b.Z, c.X - b.X);
+        float d = h2 - h1;
+        if (d > MathF.PI) d -= 2 * MathF.PI;
+        else if (d < -MathF.PI) d += 2 * MathF.PI;
+        float len = 0.5f * (new Vector2(b.X - a.X, b.Z - a.Z).Length() + new Vector2(c.X - b.X, c.Z - b.Z).Length());
+        return len > 0.05f ? d / len : 0f;
+    }
+
+    // signed curvature around the car (same sign as the yaw rate), blended along the segment -> wheel angle in degrees
+    private float GeometricWheelAngleDeg(int nextPointId, float t)
+    {
+        var pts = _spline.Points;
+        int p0 = CurrentSplinePointId;
+        Vector3 P0 = pts[p0].Position;
+        Vector3 P1 = pts[nextPointId].Position;
+        bool has2 = _junctionEvaluator.TryNext(p0, out var p2, 2);
+        bool has3 = has2 && _junctionEvaluator.TryNext(p0, out var p3, 3) && p3 >= 0;
+        bool hasM = _junctionEvaluator.TryPrevious(p0, out var pm);
+
+        float k1 = has2 ? VertexCurvature(P0, P1, pts[p2].Position) : 0f;
+        float k0 = hasM ? VertexCurvature(pts[pm].Position, P0, P1) : k1;
+        float k2 = k1;
+        if (has3 && _junctionEvaluator.TryNext(p0, out var p3b, 3))
+            k2 = VertexCurvature(P1, pts[p2].Position, pts[p3b].Position);
+
+        t = Math.Clamp(t, 0f, 1f);
+        float kappa = (1f - t) * 0.5f * (k0 + k1) + t * 0.5f * (k1 + k2);
+        float deg = MathF.Atan(WheelbaseMeters * kappa) * 180f / MathF.PI;
+        return Math.Clamp(deg, -MaxWheelAngleDeg, MaxWheelAngleDeg);
     }
 
     private void CalculateTangents()
@@ -318,20 +433,84 @@ public class AiState
         return isAllowedLane;
     }
 
+    // Seacrest 2026-10-10: max corner speed^2 = lateral accel * radius, lateral accel goes from
+    // CornerTightLatAccel (tight corners) to CornerWideLatAccel (wide corners), interpolated by radius
+    private float MaxCorneringSpeedSquared(float radius)
+    {
+        var p = _configuration.Extra.AiParams;
+        float span = p.CornerWideRadiusMeters - p.CornerTightRadiusMeters;
+        float t = span > 0.01f ? Math.Clamp((radius - p.CornerTightRadiusMeters) / span, 0f, 1f) : 1f;
+        float latAccel = p.CornerTightLatAccel + (p.CornerWideLatAccel - p.CornerTightLatAccel) * t;
+        return MathF.Max(0.1f, latAccel) * MathF.Max(1f, radius);
+    }
+
+    // Seacrest 2026-10-25: drifting cars may take the drift corner faster (SpeedFactor in drift_zones.yml)
+    private float DriftSpeedSquaredFactor(int pointId)
+    {
+        if (!_driftCar) return 1f;
+        float w = _drift.Weight(pointId);
+        if (w <= 0) return 1f;
+        float f = 1f + (_drift.Settings.SpeedFactor - 1f) * w;
+        return f * f;
+    }
+
+    // distance needed to slow from v (speed^2) to vc (speed^2) at the given deceleration, times CorneringBrakeDistanceFactor
+    private float CornerBrakingDistance(float currentSpeedSquared, float targetSpeedSquared, float deceleration)
+    {
+        return MathF.Max(0f, currentSpeedSquared - targetSpeedSquared) / (2 * MathF.Max(0.1f, deceleration))
+               * EntryCar.AiCorneringBrakeDistanceFactor;
+    }
+
     private (AiState? ClosestAiState, float ClosestAiStateDistance, float MaxSpeed) SplineLookahead()
     {
         var points = _spline.Points;
         var junctions = _spline.Junctions;
         
-        float maxBrakingDistance = PhysicsUtils.CalculateBrakingDistance(CurrentSpeed, EntryCar.AiDeceleration) * 2 + 20;
+        // Seacrest 2026-10-10: corner braking uses (v^2 - vc^2) / 2a; look far enough ahead for that
+        float cornerDecel = EntryCar.AiDeceleration * EntryCar.AiCorneringBrakeForceFactor;
+        float maxBrakingDistance = MathF.Max(PhysicsUtils.CalculateBrakingDistance(CurrentSpeed, EntryCar.AiDeceleration) * 2,
+                                             CornerBrakingDistance(CurrentSpeed * CurrentSpeed, 0, cornerDecel)) + 20;
         AiState? closestAiState = null;
         float closestAiStateDistance = float.MaxValue;
         bool junctionFound = false;
         float distanceTravelled = 0;
         var pointId = CurrentSplinePointId;
-        ref readonly var point = ref points[pointId]; 
+        ref readonly var point = ref points[pointId];
         float maxSpeed = float.MaxValue;
         float currentSpeedSquared = CurrentSpeed * CurrentSpeed;
+
+        // the point we are on now counts too (we are already in that part of the corner)
+        {
+            float vc2 = MaxCorneringSpeedSquared(point.Radius) * DriftSpeedSquaredFactor(pointId);
+            if (vc2 < currentSpeedSquared)
+                maxSpeed = MathF.Sqrt(vc2);
+        }
+
+        // traffic rules: first uncleared stop point ahead (or the one we are standing on / just passed)
+        int stopId = -1;
+        TrafficJunction? stopJct = null;
+        float stopDist = float.MaxValue;
+        if (_rules.Enabled)
+        {
+            // the point we are on, or up to ~10 m behind (rolled past the line): still stop there
+            int backId = pointId;
+            float back = -_currentVecProgress;
+            for (int b = 0; b < 6 && backId >= 0; b++)
+            {
+                if (backId != _clearedStopId && (stopJct = _rules.GetStop(backId)) != null)
+                {
+                    stopId = backId;
+                    stopDist = back;
+                    break;
+                }
+                if (!_junctionEvaluator.TryPrevious(backId, out var prevId)) break;
+                back -= points[prevId].Length;
+                backId = prevId;
+                if (back < -10f) break;
+            }
+            if (stopId < 0) stopJct = null;
+        }
+
         while (distanceTravelled < maxBrakingDistance)
         {
             distanceTravelled += point.Length;
@@ -367,19 +546,49 @@ public class AiState
                 }
             }
 
-            float maxCorneringSpeedSquared = PhysicsUtils.CalculateMaxCorneringSpeedSquared(point.Radius, EntryCar.AiCorneringSpeedFactor);
+            // Seacrest 2026-10-10: radius dependent grip + correct braking distance, measured from the car itself
+            float maxCorneringSpeedSquared = MaxCorneringSpeedSquared(point.Radius) * DriftSpeedSquaredFactor(pointId);
             if (maxCorneringSpeedSquared < currentSpeedSquared)
             {
                 float maxCorneringSpeed = MathF.Sqrt(maxCorneringSpeedSquared);
-                float brakingDistance = PhysicsUtils.CalculateBrakingDistance(CurrentSpeed - maxCorneringSpeed,
-                                            EntryCar.AiDeceleration * EntryCar.AiCorneringBrakeForceFactor)
-                                        * EntryCar.AiCorneringBrakeDistanceFactor;
+                float brakingDistance = CornerBrakingDistance(currentSpeedSquared, maxCorneringSpeedSquared, cornerDecel);
 
-                if (brakingDistance > distanceTravelled)
+                if (brakingDistance > distanceTravelled - _currentVecProgress)
                 {
                     maxSpeed = Math.Min(maxCorneringSpeed, maxSpeed);
                 }
             }
+
+            if (_rules.Enabled && stopId < 0 && pointId != _clearedStopId)
+            {
+                var j = _rules.GetStop(pointId);
+                if (j != null)
+                {
+                    stopId = pointId;
+                    stopJct = j;
+                    stopDist = distanceTravelled - _currentVecProgress;
+                }
+            }
+        }
+
+        if (_stopPointId >= 0 && stopId != _stopPointId && !_waitingAtStop && _stopPointId != _clearedStopId && _stopJunction != null)
+        {
+            _rules.DebugLog("AI {Id} RAN the stop at {Junction} (speed {Speed:0.0} m/s)", EntryCar.SessionId, _stopJunction.Name, CurrentSpeed);
+        }
+        if (stopId != _stopPointId && _waitingAtStop && _stopJunction != null)
+        {
+            _rules.Leave(_stopJunction, this);
+            _waitingAtStop = false;
+        }
+        _stopPointId = stopId;
+        _stopJunction = stopJct;
+        _stopDistance = stopDist;
+        if (stopId >= 0)
+        {
+            // brake smoothly so the car stops about 1 m before the stop point
+            float d = MathF.Max(0, stopDist - 1.0f);
+            float v = MathF.Sqrt(2 * EntryCar.AiDeceleration * _rules.StopDecelFactor * d);
+            maxSpeed = Math.Min(maxSpeed, v);
         }
 
         return (closestAiState, closestAiStateDistance, maxSpeed);
@@ -470,8 +679,15 @@ public class AiState
             
         if (_sessionManager.ServerTimeMilliseconds < _ignoreObstaclesUntil)
         {
-            SetTargetSpeed(MaxSpeed);
-            return;
+            if (_rules.Enabled && _stopPointId >= 0 && _stopDistance < 80)
+            {
+                _ignoreObstaclesUntil = 0; // never run a stop sign while ignoring obstacles
+            }
+            else
+            {
+                SetTargetSpeed(MaxSpeed);
+                return;
+            }
         }
 
         if (_sessionManager.ServerTimeMilliseconds < _stoppedForCollisionUntil)
@@ -523,7 +739,46 @@ public class AiState
 
         targetSpeed = Math.Min(splineLookahead.MaxSpeed, targetSpeed);
 
-        if (CurrentSpeed == 0 && !_stoppedForObstacle)
+        // traffic rules: wait at the stop point until the junction is clear
+        long now = _sessionManager.ServerTimeMilliseconds;
+        if (_stopPointId >= 0 && _stopJunction != null)
+        {
+            if (!_waitingAtStop && _stopDistance < 3.0f && CurrentSpeed < 0.3f)
+            {
+                _waitingAtStop = true;
+                _waitingSince = now;
+                _rules.Arrive(_stopJunction, this, now);
+            }
+
+            if (_waitingAtStop)
+            {
+                if (_rules.CanGo(_stopJunction, this, now, _waitingSince))
+                {
+                    _rules.Leave(_stopJunction, this);
+                    _clearedStopId = _stopPointId;
+                    _waitingAtStop = false;
+                    _stopPointId = -1;
+                    _stopJunction = null;
+                    _stopDistance = float.MaxValue;
+                }
+                else
+                {
+                    targetSpeed = 0;
+                }
+            }
+            else if (_stopDistance < 1.0f)
+            {
+                targetSpeed = 0;
+            }
+        }
+        // in a stop queue = waiting at a stop, or stopped behind a car that is in a stop queue
+        InStopQueue = _waitingAtStop || (hasObstacle && splineLookahead.ClosestAiState?.InStopQueue == true && CurrentSpeed < 0.5f);
+        if (InStopQueue)
+        {
+            // no honking, no 'ignore obstacles' timeout while queueing at a stop sign
+            _stoppedForObstacle = false;
+        }
+        else if (CurrentSpeed == 0 && !_stoppedForObstacle)
         {
             _stoppedForObstacle = true;
             _stoppedForObstacleSince = _sessionManager.ServerTimeMilliseconds;
@@ -543,7 +798,8 @@ public class AiState
         }
 
         float deceleration = EntryCar.AiDeceleration;
-        if (!hasObstacle)
+        bool brakingForStop = _stopPointId >= 0 && _stopDistance < 80 && targetSpeed < CurrentSpeed;
+        if (!hasObstacle && !brakingForStop)
         {
             deceleration *= EntryCar.AiCorneringBrakeForceFactor;
         }
@@ -638,23 +894,118 @@ public class AiState
             Z = ops.GetCamber(CurrentSplinePointId, _currentVecProgress / _currentVecLength)
         };
 
+        float dtSec = dt / 1000.0f;
+        float yawRate = 0; // still used for body roll
+        if (_hasLastYaw && dtSec > 0 && CurrentSpeed > 1.0f)
+        {
+            float yawDelta = rotation.X - _lastYaw;
+            if (yawDelta > MathF.PI) yawDelta -= 2 * MathF.PI;
+            else if (yawDelta < -MathF.PI) yawDelta += 2 * MathF.PI;
+            yawRate = yawDelta / dtSec;
+        }
+        _lastYaw = rotation.X;
+
+        // Seacrest 2026-10-26: wheel angle from the spline shape (curvature at the car), not from yaw rate per tick.
+        // Same angle at any speed, kept while standing still (wheels stay turned at a STOP), smoothed over distance.
+        float targetWheelAngleDeg = GeometricWheelAngleDeg(nextPoint, _currentVecProgress / _currentVecLength);
+        if (!_hasLastYaw)
+            _smoothedWheelAngleDeg = targetWheelAngleDeg;
+        else
+            _smoothedWheelAngleDeg += (targetWheelAngleDeg - _smoothedWheelAngleDeg) * MathF.Min(1f, moveMeters / WheelSmoothMeters);
+        _hasLastYaw = true;
+
+        float lateralG = CurrentSpeed * yawRate / 9.81f;
+        float targetRollDeg = Math.Clamp(lateralG * RollDegPerG, -MaxRollDeg, MaxRollDeg);
+        float targetRollRad = RollSign * targetRollDeg * MathF.PI / 180f;
+        _smoothedRollRad += (targetRollRad - _smoothedRollRad) * MathF.Min(1f, dtSec * 5f);
+        rotation.Z += _smoothedRollRad;
+
+        // pitch from measured speed change (positive = accelerating)
+        float longAccel = 0;
+        if (dtSec > 0)
+            longAccel = (CurrentSpeed - _lastSpeed) / dtSec;
+        _smoothedLongAccel += (longAccel - _smoothedLongAccel) * MathF.Min(1f, dtSec * 6f);
+        float longG = _smoothedLongAccel / 9.81f;
+        float targetPitchDeg = Math.Clamp(longG * PitchDegPerG, -MaxPitchDeg, MaxPitchDeg);
+        float targetPitchRad = PitchSign * targetPitchDeg * MathF.PI / 180f;
+        _smoothedPitchRad += (targetPitchRad - _smoothedPitchRad) * MathF.Min(1f, dtSec * 4f);
+        rotation.Y += _smoothedPitchRad;
+        _lastSpeed = CurrentSpeed;
+
+        // Seacrest 2026-10-25: drift (after wheel/roll/pitch, so the yaw rate above stays the spline's own)
+        Vector3 position = smoothPos.Position;
+        float wheelDeg = _smoothedWheelAngleDeg;
+        float rearSpin = 1f;
+        if (_driftCar)
+        {
+            float target = 0;
+            float w = _drift.Weight(CurrentSplinePointId);
+            if (w > 0 && CurrentSpeed > 3.0f && CurrentSpeed * 3.6f >= _drift.Settings.MinSpeedKmh)
+            {
+                target = w;
+                _driftSide = _drift.Side(CurrentSplinePointId);
+                if (!_driftLogged && _drift.Settings.Debug)
+                {
+                    Log.Debug("Drift: AI {SessionId} drifting in {Zone} (point {Point}, {Speed:0} km/h)",
+                        EntryCar.SessionId, _drift.ZoneName(CurrentSplinePointId), CurrentSplinePointId, CurrentSpeed * 3.6f);
+                    _driftLogged = true;
+                }
+            }
+            else
+            {
+                _driftLogged = false;
+            }
+            _driftFactor += (target - _driftFactor) * MathF.Min(1f, dtSec * _drift.Settings.BlendRate);
+            if (target == 0 && _driftFactor < 0.002f) _driftFactor = 0;
+
+            var tan = new Vector2(smoothPos.Tangent.X, smoothPos.Tangent.Z);
+            if (_driftFactor > 0 && _driftSide != 0 && tan.LengthSquared() > 1e-6f)
+            {
+                var s = _drift.Settings;
+                tan = Vector2.Normalize(tan);
+                var left = new Vector2(tan.Y, -tan.X); // same 'left' as AdjacentLaneDetector / DriftZones
+                float a = s.AngleDeg * MathF.PI / 180f * _driftFactor * _driftSide; // nose toward the inside of the corner
+                var nose = tan * MathF.Cos(a) + left * MathF.Sin(a);
+                float newYaw = MathF.Atan2(nose.Y, nose.X) - MathF.PI / 2;
+                float yawOffset = newYaw - rotation.X;
+                if (yawOffset > MathF.PI) yawOffset -= 2 * MathF.PI;
+                else if (yawOffset < -MathF.PI) yawOffset += 2 * MathF.PI;
+                rotation.X = newYaw;
+
+                // slide a bit to the outside of the corner
+                float outward = s.OutwardMeters * _driftFactor;
+                position.X -= _driftSide * left.X * outward;
+                position.Z -= _driftSide * left.Y * outward;
+
+                // counter-steer: front wheels against the body rotation
+                float counterDeg = Math.Clamp(-yawOffset * 180f / MathF.PI * s.CounterSteerRatio, -MaxWheelAngleDeg, MaxWheelAngleDeg);
+                wheelDeg = _smoothedWheelAngleDeg + (counterDeg - _smoothedWheelAngleDeg) * _driftFactor;
+
+                rearSpin = 1f + (s.RearWheelSpin - 1f) * _driftFactor;
+            }
+        }
+
+        byte encodedWheel = (byte)Math.Clamp(MathF.Round(127 + WheelAngleSign * wheelDeg * WheelAngleScale), 0, 255);
+
         float tyreAngularSpeed = GetTyreAngularSpeed(CurrentSpeed, EntryCar.TyreDiameterMeters);
-        byte encodedTyreAngularSpeed =  (byte) (Math.Clamp(MathF.Round(MathF.Log10(tyreAngularSpeed + 1.0f) * 20.0f) * Math.Sign(tyreAngularSpeed), -100.0f, 154.0f) + 100.0f);
+        byte encodedTyreAngularSpeed = EncodeTyreAngularSpeed(tyreAngularSpeed);
+        byte encodedRearTyreAngularSpeed = rearSpin != 1f ? EncodeTyreAngularSpeed(tyreAngularSpeed * rearSpin) : encodedTyreAngularSpeed;
 
         Status.Timestamp = _sessionManager.ServerTimeMilliseconds;
-        Status.Position = smoothPos.Position with { Y = smoothPos.Position.Y + EntryCar.AiSplineHeightOffsetMeters };
+        Status.Position = position with { Y = position.Y + EntryCar.AiSplineHeightOffsetMeters };
         Status.Rotation = rotation;
         Status.Velocity = smoothPos.Tangent * CurrentSpeed;
-        Status.SteerAngle = 127;
-        Status.WheelAngle = 127;
+
+        Status.SteerAngle = encodedWheel;
+        Status.WheelAngle = encodedWheel;
         Status.TyreAngularSpeed[0] = encodedTyreAngularSpeed;
         Status.TyreAngularSpeed[1] = encodedTyreAngularSpeed;
-        Status.TyreAngularSpeed[2] = encodedTyreAngularSpeed;
-        Status.TyreAngularSpeed[3] = encodedTyreAngularSpeed;
+        Status.TyreAngularSpeed[2] = encodedRearTyreAngularSpeed;
+        Status.TyreAngularSpeed[3] = encodedRearTyreAngularSpeed;
         Status.EngineRpm = (ushort)MathUtils.Lerp(EntryCar.AiIdleEngineRpm, EntryCar.AiMaxEngineRpm, CurrentSpeed / _configuration.Extra.AiParams.MaxSpeedMs);
         Status.StatusFlag = CarStatusFlags.LightsOn
                             | CarStatusFlags.HighBeamsOff
-                            | (_sessionManager.ServerTimeMilliseconds < _stoppedForCollisionUntil || CurrentSpeed < 20 / 3.6f ? CarStatusFlags.HazardsOn : 0)
+                            | (_sessionManager.ServerTimeMilliseconds < _stoppedForCollisionUntil || (CurrentSpeed < 20 / 3.6f && !InStopQueue && !(_stopPointId >= 0 && _stopDistance < 60)) ? CarStatusFlags.HazardsOn : 0)
                             | (CurrentSpeed == 0 || Acceleration < 0 ? CarStatusFlags.BrakeLightsOn : 0)
                             | (_stoppedForObstacle && _sessionManager.ServerTimeMilliseconds > _obstacleHonkStart && _sessionManager.ServerTimeMilliseconds < _obstacleHonkEnd ? CarStatusFlags.Horn : 0)
                             | GetWiperSpeed(_weatherManager.CurrentWeather.RainIntensity)
@@ -665,6 +1016,11 @@ public class AiState
     private static float GetTyreAngularSpeed(float speed, float wheelDiameter)
     {
         return speed / (MathF.PI * wheelDiameter) * 6;
+    }
+
+    private static byte EncodeTyreAngularSpeed(float tyreAngularSpeed)
+    {
+        return (byte) (Math.Clamp(MathF.Round(MathF.Log10(tyreAngularSpeed + 1.0f) * 20.0f) * Math.Sign(tyreAngularSpeed), -100.0f, 154.0f) + 100.0f);
     }
 
     private static CarStatusFlags GetWiperSpeed(float rainIntensity)

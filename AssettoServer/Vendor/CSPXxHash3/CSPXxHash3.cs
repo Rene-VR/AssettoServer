@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace AssettoServer.Vendor.CSPXxHash3;
@@ -6,6 +7,7 @@ namespace AssettoServer.Vendor.CSPXxHash3;
 internal static unsafe partial class CSPXxHash3
 {
     [LibraryImport("csp_xxhash3", EntryPoint = "XXH3_64bits")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static partial long Hash64Internal(void* data, UIntPtr len);
 
     /// <summary>

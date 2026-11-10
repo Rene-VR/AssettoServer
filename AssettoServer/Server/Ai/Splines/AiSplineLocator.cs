@@ -41,14 +41,28 @@ public class AiSplineLocator
             using var t = Operation.Time("Generating cache");
             var aiPackage = _parser.FromFiles(mapAiBasePath);
             _writer.ToFile(aiPackage, cachePath);
+
+            // Seacrest 2026-10-25: remove old cache files (other aip / other settings), they are never used again
+            foreach (var old in Directory.EnumerateFiles("cache", "*.aic*"))
+            {
+                if (Path.GetFullPath(old) == Path.GetFullPath(cachePath)) continue;
+                try { File.Delete(old); Log.Information("Deleted old AI spline cache {File}", Path.GetFileName(old)); }
+                catch (Exception ex) { Log.Warning(ex, "Could not delete old AI spline cache {File}", old); }
+            }
         }
 
         return new AiSpline(cachePath);
     }
 
-    private static string GenerateCacheKey(string folder)
+    private string GenerateCacheKey(string folder)
     {
         var hash = new XxHash64();
+
+        // Seacrest 2026-10-25: settings that are baked into the cache are part of the key,
+        // so changing them in extra_cfg.yml rebuilds the cache automatically
+        var p = _configuration.Extra.AiParams;
+        hash.Append(System.Text.Encoding.UTF8.GetBytes(FormattableString.Invariant(
+            $"seacrest1|lw={p.LaneWidthMeters}|2way={p.TwoWayTraffic}|camber={p.SmoothCamber}|")));
         
         string aipPath = Path.Join(folder, "fast_lane.aip");
         if (File.Exists(aipPath))

@@ -163,6 +163,20 @@ public class AiBehavior : CriticalBackgroundService, IAssettoServerAutostart
         }
     }
     
+    // Maximum number of AI cars on the road at the same time (set in AdjustOverbooking).
+    // Every AI slot keeps at least one AI state, so the car model/skin of a new traffic car
+    // is picked at random from ALL slots, not from the first slots of entry_list.ini.
+    private volatile int _targetOnRoad = int.MaxValue;
+
+    private static void Shuffle<T>(IList<T> list)
+    {
+        for (int i = list.Count - 1; i > 0; i--)
+        {
+            int j = Random.Shared.Next(i + 1);
+            (list[i], list[j]) = (list[j], list[i]);
+        }
+    }
+
     private readonly List<EntryCar> _playerCars = new();
     private readonly List<AiState> _initializedAiStates = new();
     private readonly List<AiState> _uninitializedAiStates = new();
@@ -266,6 +280,22 @@ public class AiBehavior : CriticalBackgroundService, IAssettoServerAutostart
             }
         }
 
+        int onRoad = _initializedAiStates.Count;
+        int targetOnRoad = _targetOnRoad;
+
+        // Too many cars on the road (e.g. a player left): remove far away cars until the target is reached
+        while (onRoad > targetOnRoad)
+        {
+            var excess = _uninitializedAiStates.FirstOrDefault(state => state.Initialized);
+            if (excess == null) break;
+
+            excess.Despawn();
+            onRoad--;
+        }
+
+        // Random order = random car model/skin, independent of the order in entry_list.ini
+        Shuffle(_uninitializedAiStates);
+
         while (_playerCars.Count > 0 && _uninitializedAiStates.Count > 0)
         {
             int spawnPointId = -1;
@@ -287,6 +317,21 @@ public class AiBehavior : CriticalBackgroundService, IAssettoServerAutostart
             {
                 if (!targetAiState.CanSpawn(spawnPointId, previousAi, nextAi))
                     continue;
+
+                if (!targetAiState.Initialized)
+                {
+                    if (onRoad >= targetOnRoad)
+                    {
+                        // Target reached: swap a far away car for this new one so the car models rotate
+                        var retire = _uninitializedAiStates.FirstOrDefault(state => state.Initialized);
+                        if (retire == null) continue;
+
+                        retire.Despawn();
+                        onRoad--;
+                    }
+
+                    onRoad++;
+                }
 
                 targetAiState.Teleport(spawnPointId);
 
@@ -408,13 +453,45 @@ public class AiBehavior : CriticalBackgroundService, IAssettoServerAutostart
             return -1;
         }
         
-        int spawnDistance = Random.Shared.Next(_configuration.Extra.AiParams.MinSpawnDistancePoints, _configuration.Extra.AiParams.MaxSpawnDistancePoints);
-        var spawnPointId = _junctionEvaluator.Traverse(result.PointId, spawnDistance * direction);
+        // Seacrest 2026-11-01: separate spawn distances for cars driving the same way as the player (in front)
+        // and ONCOMING cars. Oncoming range 0 = same as the normal range.
+        var aiParams = _configuration.Extra.AiParams;
+        int minFront = aiParams.MinSpawnDistancePoints;
+        int maxFront = aiParams.MaxSpawnDistancePoints;
+        int minOncoming = aiParams.MinOncomingSpawnDistancePoints > 0 ? aiParams.MinOncomingSpawnDistancePoints : minFront;
+        int maxOncoming = aiParams.MaxOncomingSpawnDistancePoints > 0 ? aiParams.MaxOncomingSpawnDistancePoints : maxFront;
+        bool splitDistances = (minOncoming != minFront || maxOncoming != maxFront) && playerCar.Status.Velocity.LengthSquared() > 1f;
+        int minAny = Math.Min(minFront, minOncoming);
+        int maxAny = Math.Max(maxFront, maxOncoming);
+        if (maxAny <= minAny) maxAny = minAny + 1;
 
-        if (spawnPointId >= 0)
+        int spawnPointId = -1;
+        bool accepted = false;
+        for (int attempt = 0; attempt < 10 && !accepted; attempt++)
         {
-            spawnPointId = _spline.RandomLane(spawnPointId);
+            int spawnDistance = Random.Shared.Next(minAny, maxAny);
+            spawnPointId = _junctionEvaluator.Traverse(result.PointId, spawnDistance * direction);
+
+            if (spawnPointId >= 0)
+            {
+                spawnPointId = _spline.RandomLane(spawnPointId);
+            }
+
+            if (!splitDistances || spawnPointId < 0 || ops.Points[spawnPointId].NextId < 0)
+            {
+                accepted = true;
+                break;
+            }
+
+            // the lane picked above decides which distance range applies
+            bool oncoming = Vector3.Dot(ops.GetForwardVector(spawnPointId), playerCar.Status.Velocity) < 0;
+            int lo = oncoming ? minOncoming : minFront;
+            int hi = oncoming ? maxOncoming : maxFront;
+            accepted = spawnDistance >= lo && spawnDistance <= hi;
         }
+
+        // no lane/distance combination fitted its range: skip this spawn, the next update tries again
+        if (!accepted) return -1;
         
         if (spawnPointId >= 0 && ops.Points[spawnPointId].NextId >= 0)
         {
@@ -447,15 +524,21 @@ public class AiBehavior : CriticalBackgroundService, IAssettoServerAutostart
             
         int targetAiCount = Math.Min(playerCount * Math.Min((int)Math.Round(_configuration.Extra.AiParams.AiPerPlayerTargetCount * _configuration.Extra.AiParams.TrafficDensity), aiSlots.Count), _configuration.Extra.AiParams.MaxAiTargetCount);
 
+        _targetOnRoad = targetAiCount;
+
         int overbooking = targetAiCount / aiSlots.Count;
         int rest = targetAiCount % aiSlots.Count;
+
+        // Random slots get the extra (overbooked) AI states, not always the first ones in the entry list
+        Shuffle(aiSlots);
             
         Log.Debug("AI Slot overbooking update - No. players: {NumPlayers} - No. AI Slots: {NumAiSlots} - Target AI count: {TargetAiCount} - Overbooking: {Overbooking} - Rest: {Rest}", 
             playerCount, aiSlots.Count, targetAiCount, overbooking, rest);
 
         for (int i = 0; i < aiSlots.Count; i++)
         {
-            aiSlots[i].SetAiOverbooking(i < rest ? overbooking + 1 : overbooking);
+            // Every slot keeps at least one AI state; how many are on the road at once is limited by _targetOnRoad
+            aiSlots[i].SetAiOverbooking(Math.Max(1, i < rest ? overbooking + 1 : overbooking));
         }
     }
 

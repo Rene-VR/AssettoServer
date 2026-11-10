@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
@@ -218,6 +218,10 @@ public partial class AiParams : ObservableObject
     public int MinSpawnDistancePoints { get; set; } = 100;
     [YamlMember(Description = "Maximum amount of spline points in front of a player where AI cars will spawn")]
     public int MaxSpawnDistancePoints { get; set; } = 400;
+    [YamlMember(Description = "Minimum amount of spline points in front of a player where ONCOMING AI cars (opposite direction) will spawn. 0 = same as MinSpawnDistancePoints")]
+    public int MinOncomingSpawnDistancePoints { get; set; } = 0;
+    [YamlMember(Description = "Maximum amount of spline points in front of a player where ONCOMING AI cars (opposite direction) will spawn. 0 = same as MaxSpawnDistancePoints")]
+    public int MaxOncomingSpawnDistancePoints { get; set; } = 0;
     [YamlMember(Description = "Minimum distance between AI cars")]
     public int MinAiSafetyDistanceMeters { get; set; } = 20;
     [YamlMember(Description = "Maximum distance between AI cars")]
@@ -287,6 +291,24 @@ public partial class AiParams : ObservableObject
     [property: YamlMember(Description = "AI cornering brake force factor. This is multiplied with DefaultDeceleration. Lower = AI cars will brake less hard for corners.")]
     private float _corneringBrakeForceFactor = 0.5f;
     
+    // Seacrest 2026-10-10: radius dependent corner speed (replaces CorneringSpeedFactor). max speed = sqrt(lateral accel * radius)
+    [YamlMember(Description = "Seacrest: sideways grip (m/s^2) the AI uses in tight corners (radius <= CornerTightRadiusMeters). Lower = slower in tight corners")]
+    public float CornerTightLatAccel { get; set; } = 3.0f;
+    [YamlMember(Description = "Seacrest: radius (m) at or below which CornerTightLatAccel is used")]
+    public float CornerTightRadiusMeters { get; set; } = 15.0f;
+    [YamlMember(Description = "Seacrest: sideways grip (m/s^2) the AI uses in wide corners (radius >= CornerWideRadiusMeters). Higher = faster in wide corners")]
+    public float CornerWideLatAccel { get; set; } = 9.0f;
+    [YamlMember(Description = "Seacrest: radius (m) at or above which CornerWideLatAccel is used. In between the grip is interpolated")]
+    public float CornerWideRadiusMeters { get; set; } = 200.0f;
+
+    // Seacrest: AI car animation settings (were constants in aistate.cs)
+    [YamlMember(Description = "Seacrest: AI front wheel angle scale (wheel angle units per degree). 0 = wheels stay straight")]
+    public float WheelAngleScale { get; set; } = 12.0f;
+    [YamlMember(Description = "Seacrest: AI body roll in degrees per g of cornering. 0 = no roll")]
+    public float RollDegPerG { get; set; } = 2.5f;
+    [YamlMember(Description = "Seacrest: AI body pitch in degrees per g of braking/acceleration. 0 = no pitch")]
+    public float PitchDegPerG { get; set; } = 2.5f;
+
     [YamlMember(Description = "Name prefix for AI cars. Names will be in the form of '<NamePrefix> <SessionId>'")]
     public string NamePrefix { get; init; } = "Traffic";
     [YamlMember(Description = "Ignore obstacles for some time if the AI car is stopped for longer than x seconds")]

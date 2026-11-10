@@ -35,6 +35,8 @@ public class AiModule : Module
             builder.RegisterType<FastLaneParser>().AsSelf();
             builder.RegisterType<AiSplineLocator>().AsSelf();
             builder.Register((AiSplineLocator locator) => locator.Locate()).AsSelf().SingleInstance();
+            builder.RegisterType<TrafficRules>().AsSelf().SingleInstance(); // Seacrest 2026-10-09: stop signs + give way
+            builder.RegisterType<DriftZones>().AsSelf().SingleInstance().AutoActivate(); // loads at startup so the zone log shows right away; Seacrest 2026-10-25: AI drift zones (drift_zones.yml)
         }
     }
 }

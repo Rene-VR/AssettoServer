@@ -1,9 +1,9 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
         <TargetFramework>net8.0</TargetFramework>
-        <RuntimeIdentifiers>win-x64;linux-x64;linux-arm64</RuntimeIdentifiers>
+        <RuntimeIdentifiers>win-x64;win-x86;linux-x64;linux-arm64</RuntimeIdentifiers>
         <PublishSingleFile Condition="'$(NO_SINGLE_FILE)' != '1'">true</PublishSingleFile>
         <SelfContained Condition="'$(Configuration)' == 'Release'">true</SelfContained>
         <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
@@ -12,10 +12,12 @@
         <PublishDir Condition="'$(RuntimeIdentifier)' == 'linux-x64'">..\out-linux-x64\</PublishDir>
         <PublishDir Condition="'$(RuntimeIdentifier)' == 'linux-arm64'">..\out-linux-arm64\</PublishDir>
         <PublishDir Condition="'$(RuntimeIdentifier)' == 'win-x64'">..\out-win-x64\</PublishDir>
+        <PublishDir Condition="'$(RuntimeIdentifier)' == 'win-x86'">..\out-win-x86\</PublishDir>
         <NoWarn>ERP022,EPC12</NoWarn>
         <Platforms>AnyCPU</Platforms>
         <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
         <DefineConstants Condition="'$(RuntimeIdentifier)' == 'linux-arm64'">DISABLE_STEAM</DefineConstants>
+        <DefineConstants Condition="'$(RuntimeIdentifier)' == 'win-x86'">DISABLE_STEAM</DefineConstants>
         <PathMap>$(MSBuildProjectDirectory)=$(MSBuildProjectName)</PathMap>
         <InvariantGlobalization>true</InvariantGlobalization>
         <ApplicationIcon>Assets/assettoserver.ico</ApplicationIcon>
@@ -102,6 +104,12 @@
         <ContentWithTargetPath Include="Redist/libcsp_xxhash3_arm64.so">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <TargetPath>libcsp_xxhash3.so</TargetPath>
+        </ContentWithTargetPath>
+    </ItemGroup>
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x86'">
+        <ContentWithTargetPath Include="Redist/csp_xxhash3_x86.dll">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <TargetPath>csp_xxhash3.dll</TargetPath>
         </ContentWithTargetPath>
     </ItemGroup>
     <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
